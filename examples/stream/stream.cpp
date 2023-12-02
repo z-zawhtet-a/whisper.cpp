@@ -13,6 +13,8 @@
 #include <vector>
 #include <fstream>
 
+#include "VadIterator.h"
+
 
 //  500 -> 00:05.000
 // 6000 -> 01:00.000
@@ -39,6 +41,7 @@ struct whisper_params {
     int32_t audio_ctx  = 0;
 
     float vad_thold    = 0.6f;
+    float min_speech_duration = 500.0f;
     float freq_thold   = 100.0f;
 
     bool speed_up      = false;
@@ -74,6 +77,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
         else if (arg == "-mt"   || arg == "--max-tokens")    { params.max_tokens    = std::stoi(argv[++i]); }
         else if (arg == "-ac"   || arg == "--audio-ctx")     { params.audio_ctx     = std::stoi(argv[++i]); }
         else if (arg == "-vth"  || arg == "--vad-thold")     { params.vad_thold     = std::stof(argv[++i]); }
+        else if (arg == "-msd"  || arg == "--min-speech-duration")     { params.min_speech_duration    = std::stof(argv[++i]); }
         else if (arg == "-fth"  || arg == "--freq-thold")    { params.freq_thold    = std::stof(argv[++i]); }
         else if (arg == "-su"   || arg == "--speed-up")      { params.speed_up      = true; }
         else if (arg == "-tr"   || arg == "--translate")     { params.translate     = true; }
@@ -111,6 +115,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -mt N,    --max-tokens N  [%-7d] maximum number of tokens per audio chunk\n",       params.max_tokens);
     fprintf(stderr, "  -ac N,    --audio-ctx N   [%-7d] audio context size (0 - all)\n",                   params.audio_ctx);
     fprintf(stderr, "  -vth N,   --vad-thold N   [%-7.2f] voice activity detection threshold\n",           params.vad_thold);
+    fprintf(stderr, "  -msd N,   --min-speech-duration N   [%-7.2f] minimum speech duration in ms\n",           params.min_speech_duration);
     fprintf(stderr, "  -fth N,   --freq-thold N  [%-7.2f] high-pass frequency cutoff\n",                   params.freq_thold);
     fprintf(stderr, "  -su,      --speed-up      [%-7s] speed up audio by x2 (reduced accuracy)\n",        params.speed_up ? "true" : "false");
     fprintf(stderr, "  -tr,      --translate     [%-7s] translate from source language to english\n",      params.translate ? "true" : "false");
@@ -128,6 +133,15 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
 
 int main(int argc, char ** argv) {
     whisper_params params;
+
+    std::string path = "./examples/stream/silero_vad.onnx";
+    int test_sr = 16000; // 16kHz
+    int test_frame_ms = 64; // 64ms
+    float test_threshold = params.vad_thold;
+    int test_window_samples = test_frame_ms * (test_sr/1000);
+
+    VadIterator vad(
+        path, test_sr, test_frame_ms, test_threshold, params.min_speech_duration);
 
     if (whisper_params_parse(argc, argv, params) == false) {
         return 1;
@@ -297,7 +311,17 @@ int main(int argc, char ** argv) {
 
             audio.get(2000, pcmf32_new);
 
-            if (::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, 1000, params.vad_thold, params.freq_thold, false)) {
+            // if (::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, 1000, params.vad_thold, params.freq_thold, false)) {
+            //     audio.get(params.length_ms, pcmf32);
+            // } else {
+            //     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            //     continue;
+            // }
+
+            vad.reset_states();
+
+            if (vad.predict(pcmf32_new)) {
                 audio.get(params.length_ms, pcmf32);
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
