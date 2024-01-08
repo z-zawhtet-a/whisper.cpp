@@ -62,6 +62,7 @@ endif
 ifeq ($(UNAME_S),Linux)
 	CFLAGS   += -D_GNU_SOURCE
 	CXXFLAGS += -D_GNU_SOURCE
+	ONNX_RUNTIME_PATH = examples/stream/onnxruntime-linux-x64-1.12.1
 endif
 
 # RLIMIT_MEMLOCK came in BSD, is not specified in POSIX.1,
@@ -70,6 +71,7 @@ endif
 ifeq ($(UNAME_S),Darwin)
 	CFLAGS   += -D_DARWIN_C_SOURCE
 	CXXFLAGS += -D_DARWIN_C_SOURCE
+	ONNX_RUNTIME_PATH = examples/stream/onnxruntime-osx-arm64-1.16.3
 endif
 ifeq ($(UNAME_S),DragonFly)
 	CFLAGS   += -D__BSD_VISIBLE
@@ -366,8 +368,7 @@ server: examples/server/server.cpp $(SRC_COMMON) $(WHISPER_OBJ)
 # 	$(CXX) $(CXXFLAGS) examples/stream/stream.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) $(WHISPER_OBJ) -o stream $(CC_SDL) $(LDFLAGS)
 
 stream: examples/stream/stream.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) $(WHISPER_OBJ) examples/stream/VadIterator.cpp
-	$(CXX) $(CXXFLAGS) -I examples/stream/onnxruntime-linux-x64-1.12.1/include examples/stream/stream.cpp examples/stream/VadIterator.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) $(WHISPER_OBJ) -o stream $(CC_SDL) $(LDFLAGS) -L examples/stream/onnxruntime-linux-x64-1.12.1/lib -lonnxruntime -Wl,-rpath,examples/stream/onnxruntime-linux-x64-1.12.1/lib
-
+	$(CXX) $(CXXFLAGS) -I $(ONNX_RUNTIME_PATH)/include examples/stream/stream.cpp examples/stream/VadIterator.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) $(WHISPER_OBJ) -o stream $(CC_SDL) $(LDFLAGS) -L $(ONNX_RUNTIME_PATH)/lib -lonnxruntime -Wl,-rpath,$(ONNX_RUNTIME_PATH)/lib
 
 command: examples/command/command.cpp examples/grammar-parser.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) $(WHISPER_OBJ)
 	$(CXX) $(CXXFLAGS) examples/command/command.cpp examples/grammar-parser.cpp $(SRC_COMMON) $(SRC_COMMON_SDL) $(WHISPER_OBJ) -o command $(CC_SDL) $(LDFLAGS)
