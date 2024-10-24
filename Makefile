@@ -182,9 +182,9 @@ endif
 
 # keep standard at C11 and C++11
 MK_CPPFLAGS  = -Iggml/include -Iggml/src -Iinclude -Isrc -Iexamples
-MK_CFLAGS    = -std=c11   -fPIC
-MK_CXXFLAGS  = -std=c++11 -fPIC
-MK_NVCCFLAGS = -std=c++11
+MK_CFLAGS    = -std=c17   -fPIC
+MK_CXXFLAGS  = -std=c++17 -fPIC
+MK_NVCCFLAGS = -std=c++17
 
 ifndef WHISPER_NO_CCACHE
 CCACHE := $(shell which ccache)
@@ -600,7 +600,7 @@ endif # GGML_CUDA_FA_ALL_QUANTS
 
 ifdef JETSON_EOL_MODULE_DETECT
 define NVCC_COMPILE
-	$(NVCC) -I. -Icommon -D_XOPEN_SOURCE=600 -D_GNU_SOURCE -DNDEBUG -DGGML_USE_CUDA -I/usr/local/cuda/include -I/opt/cuda/include -I/usr/local/cuda/targets/aarch64-linux/include -std=c++11 -O3 $(NVCCFLAGS) $(CPPFLAGS) -Xcompiler "$(CUDA_CXXFLAGS)" -c $< -o $@
+	$(NVCC) -I. -Icommon -D_XOPEN_SOURCE=600 -D_GNU_SOURCE -DNDEBUG -DGGML_USE_CUDA -I/usr/local/cuda/include -I/opt/cuda/include -I/usr/local/cuda/targets/aarch64-linux/include -std=c++17 -O3 $(NVCCFLAGS) $(CPPFLAGS) -Xcompiler "$(CUDA_CXXFLAGS)" -c $< -o $@
 endef # NVCC_COMPILE
 else
 define NVCC_COMPILE

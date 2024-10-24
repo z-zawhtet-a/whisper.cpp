@@ -11,6 +11,8 @@
 #include <thread>
 #include <vector>
 #include <cstring>
+#include <filesystem>
+#include <algorithm>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -92,6 +94,9 @@ struct whisper_params {
     std::vector<std::string> fname_out = {};
 
     grammar_parser::parse_state grammar_parsed;
+
+    bool process_folder    = false;
+    std::string folder_path = "";
 };
 
 static void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
@@ -172,6 +177,10 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (                  arg == "--grammar")         { params.grammar         = argv[++i]; }
         else if (                  arg == "--grammar-rule")    { params.grammar_rule    = argv[++i]; }
         else if (                  arg == "--grammar-penalty") { params.grammar_penalty = std::stof(argv[++i]); }
+        else if (arg == "-dir" || arg == "--directory") { 
+            params.process_folder = true;
+            params.folder_path = argv[++i];
+        }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -238,6 +247,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  --grammar GRAMMAR              [%-7s] GBNF grammar to guide decoding\n",                 params.grammar.c_str());
     fprintf(stderr, "  --grammar-rule RULE            [%-7s] top-level GBNF grammar rule name\n",               params.grammar_rule.c_str());
     fprintf(stderr, "  --grammar-penalty N            [%-7.1f] scales down logits of nongrammar tokens\n",      params.grammar_penalty);
+    fprintf(stderr, "  -dir,      --directory DIR    [%-7s] process all audio files in directory\n", params.folder_path.c_str());
     fprintf(stderr, "\n");
 }
 
@@ -546,20 +556,38 @@ static bool output_csv(struct whisper_context * ctx, const char * fname, const w
 }
 
 static bool output_score(struct whisper_context * ctx, const char * fname, const whisper_params & /*params*/, std::vector<std::vector<float>> /*pcmf32s*/) {
-    std::ofstream fout(fname);
+    std::ofstream fout(fname, std::ios::out | std::ios::binary);
+    if (!fout.is_open()) {
+        fprintf(stderr, "%s: failed to open '%s' for writing\n", __func__, fname);
+        return false;
+    }
+    
+    // Write UTF-8 BOM
+    fout << (char)0xEF << (char)0xBB << (char)0xBF;
+    
     fprintf(stderr, "%s: saving output to '%s'\n", __func__, fname);
 
+    // Write CSV header
+    fout << "token,probability\n";
+
     const int n_segments = whisper_full_n_segments(ctx);
-    // fprintf(stderr,"segments: %d\n",n_segments);
     for (int i = 0; i < n_segments; ++i) {
         const int n_tokens = whisper_full_n_tokens(ctx, i);
-        // fprintf(stderr,"tokens: %d\n",n_tokens);
         for (int j = 0; j < n_tokens; j++) {
             auto token = whisper_full_get_token_text(ctx, i, j);
             auto probability = whisper_full_get_token_p(ctx, i, j);
-            fout << token << '\t' << probability << std::endl;
-            // fprintf(stderr,"token: %s %f\n",token,probability);
-	    }
+            
+            // Escape quotes in token if present
+            std::string token_str(token);
+            size_t pos = token_str.find("\"");
+            while (pos != std::string::npos) {
+                token_str.insert(pos, "\"");
+                pos = token_str.find("\"", pos + 2);
+            }
+            
+            // Write token and probability in CSV format
+            fout << "\"" << token_str << "\"," << probability << "\n";
+        }
     }
     return true;
 }
@@ -792,7 +820,7 @@ static bool output_wts(struct whisper_context * ctx, const char * fname, const c
             if (params.diarize && pcmf32s.size() == 2) {
                 txt_bg = speaker;
                 txt_fg = speaker;
-                txt_ul = "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ ";
+                txt_ul = "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ ";
             }
 
             txt_bg.append("> ");
@@ -903,6 +931,13 @@ static bool output_lrc(struct whisper_context * ctx, const char * fname, const w
 
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
+// helper function to check if a file is an audio file
+static bool is_audio_file(const std::string& path) {
+    std::string ext = std::filesystem::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return ext == ".wav" || ext == ".mp3" || ext == ".ogg" || ext == ".wma";
+}
+
 int main(int argc, char ** argv) {
     whisper_params params;
 
@@ -940,21 +975,49 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    std::vector<std::string> files_to_process;
+
+    if (params.process_folder) {
+        // Check if folder exists
+        std::filesystem::path folder_path(params.folder_path);
+        if (!std::filesystem::is_directory(folder_path)) {
+            fprintf(stderr, "error: folder '%s' does not exist\n", params.folder_path.c_str());
+            return 1;
+        }
+
+        // Collect all audio files from the folder
+        for (const auto & entry : std::filesystem::directory_iterator(folder_path)) {
+            if (std::filesystem::is_regular_file(entry.path()) && is_audio_file(entry.path().string())) {
+                files_to_process.push_back(entry.path().string());
+            }
+        }
+
+        if (files_to_process.empty()) {
+            fprintf(stderr, "error: no audio files found in folder '%s'\n", params.folder_path.c_str());
+            return 1;
+        }
+
+        fprintf(stderr, "Found %zu audio files to process in folder '%s'\n", 
+                files_to_process.size(), params.folder_path.c_str());
+    } else {
+        files_to_process = params.fname_inp;
+    }
+
     // remove non-existent files
-    for (auto it = params.fname_inp.begin(); it != params.fname_inp.end();) {
+    for (auto it = files_to_process.begin(); it != files_to_process.end();) {
         const auto fname_inp = it->c_str();
 
         if (*it != "-" && !is_file_exist(fname_inp)) {
             fprintf(stderr, "error: input file not found '%s'\n", fname_inp);
-            it = params.fname_inp.erase(it);
+            it = files_to_process.erase(it);
             continue;
         }
 
         it++;
     }
 
-    if (params.fname_inp.empty()) {
-        fprintf(stderr, "error: no input files specified\n");
+    if (files_to_process.empty()) {
+        fprintf(stderr, "error: no valid input files specified\n");
         whisper_print_usage(argc, argv, params);
         return 2;
     }
@@ -1038,9 +1101,11 @@ int main(int argc, char ** argv) {
         }
     }
 
-    for (int f = 0; f < (int) params.fname_inp.size(); ++f) {
-        const auto fname_inp = params.fname_inp[f];
-		const auto fname_out = f < (int) params.fname_out.size() && !params.fname_out[f].empty() ? params.fname_out[f] : params.fname_inp[f];
+    for (size_t f = 0; f < files_to_process.size(); ++f) {
+        const auto fname_inp = files_to_process[f];
+        const auto fname_out = f < params.fname_out.size() && !params.fname_out[f].empty() 
+            ? params.fname_out[f] 
+            : std::filesystem::path(fname_inp).replace_extension("").string();
 
         std::vector<float> pcmf32;               // mono-channel F32 PCM
         std::vector<std::vector<float>> pcmf32s; // stereo-channel F32 PCM
@@ -1230,7 +1295,7 @@ int main(int argc, char ** argv) {
 
             // output to score file
             if (params.log_score) {
-                const auto fname_score = fname_out + ".score.txt";
+                const auto fname_score = fname_out + ".score.csv";
                 output_score(ctx, fname_score.c_str(), params, pcmf32s);
             }
         }
