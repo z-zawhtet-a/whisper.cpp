@@ -13,6 +13,10 @@
 #include <cstring>
 #include <filesystem>
 #include <algorithm>
+#include <iostream>
+#include <locale>
+#include <codecvt>
+
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -555,6 +559,30 @@ static bool output_csv(struct whisper_context * ctx, const char * fname, const w
     return true;
 }
 
+static bool is_valid_utf8(const std::string &str) {
+    std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
+    try {
+        std::wstring wstr = conv.from_bytes(str);  // Attempt to convert to wide string
+        return true;  // If successful, it's valid UTF-8
+    } catch (const std::exception &e) {
+        return false;  // If conversion fails, it's invalid UTF-8
+    }
+}
+
+static std::string sanitize_utf8(const std::string &str) {
+    std::string result;
+    for (size_t i = 0; i < str.size(); ++i) {
+        unsigned char c = str[i];
+        if (c < 128) {
+            result += c;  // Standard ASCII characters
+        } else {
+            // If it's not valid UTF-8, replace it with a placeholder character (e.g., '?')
+            result += '?';
+        }
+    }
+    return result;
+}
+
 static bool output_score(struct whisper_context * ctx, const char * fname, const whisper_params & /*params*/, std::vector<std::vector<float>> /*pcmf32s*/) {
     std::ofstream fout(fname, std::ios::out | std::ios::binary);
     if (!fout.is_open()) {
@@ -585,10 +613,17 @@ static bool output_score(struct whisper_context * ctx, const char * fname, const
                 pos = token_str.find("\"", pos + 2);
             }
             
+            // Validate if the token is valid UTF-8
+            if (!is_valid_utf8(token_str)) {
+                fprintf(stderr, "Invalid UTF-8 detected, sanitizing token: %s\n", token_str.c_str());
+                token_str = sanitize_utf8(token_str);  // Sanitize invalid UTF-8 characters
+            }
+            
             // Write token and probability in CSV format
             fout << "\"" << token_str << "\"," << probability << "\n";
         }
     }
+
     return true;
 }
 
